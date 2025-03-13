@@ -1,0 +1,87 @@
+import cv2
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.applications import VGG19
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Flatten, TimeDistributed, Bidirectional
+from ultralytics import YOLO
+
+yolo_model = YOLO("yolov8n.pt")  # Load pre-trained YOLOv8 model
+
+# CNN + Bi-LSTM Model for Violence Detection
+def create_violence_model():
+    base_model = VGG19(weights='imagenet', include_top=False, input_shape=(100, 100, 3))
+    for layer in base_model.layers:
+        layer.trainable = False
+
+    model = Sequential([
+        TimeDistributed(base_model, input_shape=(30, 100, 100, 3)),
+        TimeDistributed(Flatten()),
+        Bidirectional(LSTM(64, return_sequences=False)),
+        Dense(128, activation='relu'),
+        Dense(1, activation='sigmoid')
+    ])
+    
+    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+    return model
+
+violence_model = create_violence_model()
+
+# Extract Frames from Video
+def extract_frames(video_path, frame_count=30):
+    cap = cv2.VideoCapture(video_path)
+    frames = []
+    while len(frames) < frame_count:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame = cv2.resize(frame, (100, 100))
+        frames.append(frame)
+    cap.release()
+    
+    if len(frames) < frame_count:
+        return None  
+    return np.array(frames)
+
+# Violence Detection Function
+def detect_violence(video_path):
+    frames = extract_frames(video_path)
+    if frames is not None:
+        frames = frames / 255.0
+        frames = np.expand_dims(frames, axis=0)
+        prediction = violence_model.predict(frames)
+        return prediction > 0.5
+    return False
+
+# Weapon Detection Using YOLO
+def detect_weapons(video_path):
+    cap = cv2.VideoCapture(video_path)
+    detected_objects = []
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        results = yolo_model(frame)
+        detections = results.pandas().xyxy[0]
+
+        for _, row in detections.iterrows():
+            label = row['name']
+            if label in ['knife', 'gun']:
+                detected_objects.append(label)
+
+    cap.release()
+    return detected_objects
+
+# Process Video for Both Detections
+def process_video(video_path):
+    violence_detected = detect_violence(video_path)
+    weapons_detected = detect_weapons(video_path)
+
+    result = {
+        "violence_detected": violence_detected,
+        "weapons_detected": weapons_detected
+    }
+    
+    return result
